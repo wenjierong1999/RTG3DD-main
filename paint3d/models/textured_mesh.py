@@ -18,11 +18,12 @@ from paint3d.utils import inpaint_atlas, save_tensor_image
 
 
 class TexturedMeshModel(nn.Module):
-    def __init__(self, cfg, device=torch.device('cpu')):
+    def __init__(self, cfg, device=torch.device('cpu'), flip_texture=False):
 
         super().__init__()
         self.device = device
         self.cfg = cfg
+        self.flip_texture = flip_texture
         self.initial_texture_path = self.cfg.guide.initial_texture
         self.cache_path = Path(self.cfg.log.cache_path) / Path(cfg.guide.shape_path).stem
         self.default_color = self.cfg.render.texture_default_color
@@ -50,10 +51,13 @@ class TexturedMeshModel(nn.Module):
         # print("[DEBUG] vt:", model.mesh.vt.shape)
         # print("[DEBUG] ft:", model.mesh.ft.shape)
 
+
     def init_paint(self):
         if self.initial_texture_path is not None:
             texture_map = Image.open(self.initial_texture_path).convert("RGB").resize(self.texture_resolution)
             # texture_map = texture_map.transpose(Image.FLIP_TOP_BOTTOM) # DEBUG： flip vertically
+            if self.flip_texture:
+                texture_map = texture_map.transpose(Image.FLIP_TOP_BOTTOM)  # Flip if flag is set
             texture = torch.Tensor(np.array(texture_map)).permute(2, 0, 1).unsqueeze(0).to(self.device) / 255.0
         else:
             texture = torch.ones(1, 3, *self.texture_resolution).to(self.device) * torch.Tensor(
