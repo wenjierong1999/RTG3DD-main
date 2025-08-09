@@ -185,7 +185,8 @@ class TexturedMeshModel(nn.Module):
                 cv2.imwrite(os.path.join(convert_results_dir, "texture_split{}.png".format(material_id)),
                             cv2.cvtColor(material, cv2.COLOR_RGB2BGR))
 
-    def forward_texturing(self, view_target, theta, phi, radius, save_result_dir, view_id=None, verbose=False):
+    def forward_texturing(self, view_target, theta, phi, radius, save_result_dir, view_id=None, verbose=False,
+                          strict_uncolored_only=True):
         outputs = self.render(theta=theta, phi=phi, radius=radius)
         uncolored_mask_render = outputs['uncolored_mask']  # bchw, [0,1]
         erode_size = 19
@@ -208,7 +209,16 @@ class TexturedMeshModel(nn.Module):
             save_tensor_image(cur_texture_mask, os.path.join(save_result_dir, f"_view_{view_id}_cur_texture_mask.png"))
             save_tensor_image(weight_map, os.path.join(save_result_dir, f"_view_{view_id}_weight_map.png"))
 
-        updated_texture_map = cur_texture_map * cur_texture_mask + self.texture_img * (1 - cur_texture_mask)
+        if strict_uncolored_only:
+            # === Strict mode: only update regions with default color ===
+            default_color_tensor = torch.tensor(self.default_color).reshape(1, 3, 1, 1).to(self.device)
+            diff = (self.texture_img - default_color_tensor).abs().sum(dim=1, keepdim=True)
+            existing_colored_mask = (diff > 0.05).float()  # Adjustable threshold
+            final_update_mask = cur_texture_mask[:, 0:1, :, :] * (1 - existing_colored_mask)
+            updated_texture_map = cur_texture_map * final_update_mask + self.texture_img * (1 - final_update_mask)
+        else:
+            updated_texture_map = cur_texture_map * cur_texture_mask + self.texture_img * (1 - cur_texture_mask)
+        # updated_texture_map = cur_texture_map * cur_texture_mask + self.texture_img * (1 - cur_texture_mask)
         save_tensor_image(updated_texture_map, os.path.join(save_result_dir, f"_view_{view_id}_texture_map.png"))
         self.texture_img = nn.Parameter(updated_texture_map)
 

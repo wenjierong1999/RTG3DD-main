@@ -1,0 +1,16 @@
+__pycache__/
+results/
+my_script/
+pretrain/
+3D-Future-Demo/
+debug_notebooks/
+Shapenet-Toy/
+outputs/
+src/evaluator/tmp/
+*.out
+*.pyc
+*.pt
+*.npz
+*.log
+*.png
+*.mp4

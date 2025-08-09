@@ -73,7 +73,7 @@ if __name__ == '__main__':
     train_test_split_future3d_from_json(
         json_path='model_info.json',
         split_file_output='./',
-        categories=['Sofa','Bed'],
+        categories=['Table'],
         train_ratio=0.9
     )
         

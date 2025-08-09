@@ -1,0 +1,24 @@
+defaults:
+  - _self_
+  - paths: default.yaml
+  - datamodule: null
+  - evaluator: default.yaml
+  - model: null
+  - experiment: null
+
+local_rank: -1
+
+test_batch_size: 1
+
+test_samples: 3
+
+mode: 'joint' # coarse, fine or joint
+
+coarse_ckpt: null # overrided from cmd
+fine_ckpt: null # overrided from cmd
+
+coarse_cfg: null # will be automatically generated
+fine_cfg: null # will be automatically generated
+
+coarse_ckpt_resume: null # will be automatically generated
+fine_ckpt_resume: null # will be automatically generated

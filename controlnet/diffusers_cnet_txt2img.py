@@ -18,7 +18,10 @@ class txt2imgControlNet():
                                                                  torch_dtype=torch_dtype).to("cuda")
         if config.ip_adapter_image_path:
             # pipe.load_ip_adapter("h94/IP-Adapter", subfolder="models", weight_name="ip-adapter_sd15.safetensors")
-            pipe.load_ip_adapter("h94/IP-Adapter", subfolder="models", weight_name="ip-adapter-plus_sd15.safetensors")
+            # pipe.load_ip_adapter("h94/IP-Adapter", subfolder="models", weight_name="ip-adapter-plus_sd15.safetensors")
+            ip_adapter_key = config.get("ip_adapter_key", "ip-adapter-plus_sd15.safetensors")
+            pipe.load_ip_adapter("h94/IP-Adapter", subfolder="models", weight_name=ip_adapter_key)
+            print(f"[INFO] Loaded IP Adapter weights: {ip_adapter_key}")
         pipe.scheduler = EulerAncestralDiscreteScheduler.from_pretrained(config.sd_model_key, subfolder="scheduler")
         pipe.safety_checker = None
         pipe.requires_safety_checker = False

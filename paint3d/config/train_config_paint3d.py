@@ -7,7 +7,7 @@ from typing import Optional, Tuple, List
 @dataclass
 class RenderConfig:
     """ Parameters for the Mesh Renderer """
-    grid_size: int = 2048
+    grid_size: int = 1024
     radius: float = 1.5
     look_at_height = 0.25
     base_theta: float = 60
@@ -19,18 +19,23 @@ class RenderConfig:
     # Additional views to use before rotating around shape
     views_before: List[Tuple[float, float]] = field(default_factory=list)
     # Additional views to use after rotating around shape
-    views_after: List[Tuple[float, float]] = field(default_factory=[[180, 30], [180, 150]].copy)
+    views_after: List[Tuple[float, float]] = field(default_factory=[[180, 30], [180, 150], [90, 60], [270, 60]].copy)
     # Whether to alternate between the rotating views from the different sides
     alternate_views: bool = True
     calcu_uncolored_mode: str = "WarpGrid"  # FACE_ID, DIFF, WarpGrid
+    # calcu_uncolored_mode: str = "DIFF"
     projection_mode: str = "Pinhole"  # Pinhole, Orthographic
-    texture_interpolation_mode: str = 'bicubic'
+    texture_interpolation_mode: str = 'bilinear'
     texture_default_color: List[float] = field(default_factory=[0.8, 0.1, 0.8].copy)
+    # texture_default_color: List[float] = field(default_factory=[0.7, 0.7, 0.7].copy)
     texturify_blend_alpha: float = 1.0
-    render_angle_thres: float = 68
+    render_angle_thres: float = 78 # 68 default
     # Suzanne
-    views_init: List[float] = field(default_factory=[0, 23].copy)
+    views_init: List[float] = field(default_factory=[0, 23, 26, 27].copy)
+    # views_init: List[float] = field(default_factory=[0, 23].copy)
     views_inpaint: List[Tuple[float, float]] = field(default_factory=[(5, 6), (24, 25)].copy)
+
+    strict_uncolored_only: bool = True
 
 
 @dataclass

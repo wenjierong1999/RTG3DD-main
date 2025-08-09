@@ -60,7 +60,9 @@ class DirectionAwarenDepth2ImgControlNet:
             print(f"[INFO] Loaded PEFT LoRA weights from: {lora_path}")
         
         # === 6. Load IP Adapter if applicable ===
-        pipe.load_ip_adapter("h94/IP-Adapter", subfolder="models", weight_name="ip-adapter-plus_sd15.safetensors")
+        ip_adapter_key = config.get("ip_adapter_key", "ip-adapter-plus_sd15.safetensors")
+        pipe.load_ip_adapter("h94/IP-Adapter", subfolder="models", weight_name=ip_adapter_key)
+        print(f"[INFO] Loaded IP Adapter weights: {ip_adapter_key}")
 
         # === 7. Scheduler + disable safety checker ===
         pipe.scheduler = EulerAncestralDiscreteScheduler.from_pretrained(config["sd_model_key"], subfolder="scheduler")
@@ -104,7 +106,7 @@ class DirectionAwarenDepth2ImgControlNet:
         if self.do_classifier_free_guidance:
             prompt_embeds = torch.cat([negative_prompt_embeds, prompt_embeds], dim=0)
         
-        print(f'prompt_embeds.dtype: {prompt_embeds.dtype}')
+        # print(f'prompt_embeds.dtype: {prompt_embeds.dtype}')
         
         # 2. Prepare IP-Adapter embeddings (optional)
 
@@ -154,14 +156,14 @@ class DirectionAwarenDepth2ImgControlNet:
             # UNet forward
 
             unet_kwargs = {
-            "sample": latent_input,
-            "timestep": t,
-            "encoder_hidden_states": prompt_embeds,
-            "down_block_additional_residuals": down_block_res_samples,
-            "mid_block_additional_residual": mid_block_res_sample,
-            "added_cond_kwargs": added_cond_kwargs,
-            "return_dict": False,
-        }
+                "sample": latent_input,
+                "timestep": t,
+                "encoder_hidden_states": prompt_embeds,
+                "down_block_additional_residuals": down_block_res_samples,
+                "mid_block_additional_residual": mid_block_res_sample,
+                "added_cond_kwargs": added_cond_kwargs,
+                "return_dict": False,
+            }
 
             if self.use_custom_unet:
                 # === camera condition: either class_labels or view_dir_emb ===

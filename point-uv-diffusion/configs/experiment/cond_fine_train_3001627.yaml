@@ -1,0 +1,30 @@
+# @package _global_
+# specify the dataloader and model here
+defaults:
+  - override /datamodule: shapenet_image_fine.yaml
+  - override /model: fine_clip_stage.yaml
+
+# specify choosen category
+datamodule:
+  data_detail:
+    category: '3001627'
+  batch_size: 2 # need to be overrided in the command line
+  
+post_tag: 'demo-Table'
+seed: 912240
+
+model:
+  scheduler:
+    _target_: torch.optim.lr_scheduler.CosineAnnealingWarmRestarts
+    _partial_: true
+    T_0: 100
+
+
+trainer:
+  logger:
+    _target_: src.logger.baselogger.MyBaseLogger
+    log_dir: ${paths.output_dir}
+    log_freq: 10
+    log_img_freq: 1000
+    save_ckpt_freq: 100
+  max_epochs: 5 # 10

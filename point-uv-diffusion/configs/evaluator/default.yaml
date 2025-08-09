@@ -1,0 +1,5 @@
+# 3d future
+#_target_: src.evaluator.baseevaluator.MyBaseEvaluator
+_target_: src.evaluator.shapenetevaluator.ShapeNetEvaluator
+raw_data_folder: ${paths.raw_data_dir}
+preprocessed_data_folder: ${paths.data_dir}

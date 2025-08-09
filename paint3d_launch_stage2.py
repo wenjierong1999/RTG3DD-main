@@ -10,6 +10,7 @@ import numpy as np
 from PIL import Image
 from pathlib import Path
 from omegaconf import OmegaConf
+import gc
 
 from controlnet.diffusers_cnet_txt2img import txt2imgControlNet
 from controlnet.diffusers_cnet_inpaint import inpaintControlNet
@@ -141,6 +142,12 @@ def parse():
         default="outputs/inpainting-samples"
     )
 
+    parser.add_argument(
+        "--use_uv_tile",
+        action="store_true",
+        help="Whether to run UV tile step after inpainting",
+    )
+
     opt = parser.parse_args()
     return opt
 
@@ -156,7 +163,9 @@ def main():
     dataloaders = init_dataloaders(render_cfg, device)
 
     UVInpaint_cnet = inpaintControlNet(sd_cfg.inpaint)
-    UVtile_cnet = img2imgControlNet(sd_cfg.img2img)
+
+    if opt.use_uv_tile:
+        UVtile_cnet = img2imgControlNet(sd_cfg.img2img)
 
     total_start = time.time()
     # ===  2. UV inpaint
@@ -167,7 +176,8 @@ def main():
         mesh_model=mesh_model,
         outdir=opt.outdir,
     )
-    print(f"UV Inpainting time: {time.time() - start_t}")
+    uv_inpainting_time = time.time() - start_t
+    print(f"UV Inpainting time: {uv_inpainting_time}")
 
     outdir = opt.outdir
     mesh_model.initial_texture_path = f"{outdir}/UV_inpaint_res_0.png"
@@ -181,39 +191,70 @@ def main():
         verbose=False,
     )
 
+    if opt.use_uv_tile:
 
-    for i, (_, init_img_path) in enumerate(UV_inpaint_res):
-        outdir = Path(opt.outdir) / f"tile_res_{i}"
-        outdir.mkdir(exist_ok=True)
-        # ===  3. UV tile
-        start_t = time.time()
-        mesh_model.initial_texture_path = init_img_path
-        mesh_model.refresh_texture()
-        _ = UV_tile(
-            sd_cfg=sd_cfg,
-            cnet=UVtile_cnet,
-            mesh_model=mesh_model,
-            outdir=outdir,
-        )
-        print(f"UV tile time: {time.time() - start_t}")
+        for i, (_, init_img_path) in enumerate(UV_inpaint_res):
+            outdir = Path(opt.outdir) / f"tile_res_{i}"
+            outdir.mkdir(exist_ok=True)
+            # ===  3. UV tile
+            start_t = time.time()
+            mesh_model.initial_texture_path = init_img_path
+            mesh_model.refresh_texture()
+            _ = UV_tile(
+                sd_cfg=sd_cfg,
+                cnet=UVtile_cnet,
+                mesh_model=mesh_model,
+                outdir=outdir,
+            )
+            uv_tile_time = time.time() - start_t
+            print(f"UV tile time: {uv_tile_time}")
 
-        print(f"total processed time:{time.time() - total_start}")
-        mesh_model.initial_texture_path = f"{outdir}/UV_tile_res_0.png"
-        mesh_model.refresh_texture()
-        dr_eval(
-            cfg=render_cfg,
-            dataloaders=dataloaders,
-            mesh_model=mesh_model,
-            save_result_dir=outdir,
-            valset=True,
-            verbose=False,
-        )
-        mesh_model.empty_texture_cache()
-        torch.cuda.empty_cache()
+            print(f"total processed time:{time.time() - total_start}")
+            mesh_model.initial_texture_path = f"{outdir}/UV_tile_res_0.png"
+            mesh_model.refresh_texture()
+            dr_eval(
+                cfg=render_cfg,
+                dataloaders=dataloaders,
+                mesh_model=mesh_model,
+                save_result_dir=outdir,
+                valset=True,
+                verbose=False,
+            )
+            mesh_model.empty_texture_cache()
+            torch.cuda.empty_cache()
+
+            del UVtile_cnet
+    else:
+        uv_tile_time = 0
     
     del UVInpaint_cnet
-    del UVtile_cnet
+    # del UVtile_cnet
+
+    torch.cuda.empty_cache()
+    gc.collect()
+
+    torch.cuda.ipc_collect()
+
+    print("[INFO] Freed GPU memory at end of stage1.")
+
+    total_time = uv_inpainting_time + uv_tile_time
+
+    import json
+
+    time_stats = {
+        "uv_inpainting_time": uv_inpainting_time,
+        "uv_tile_time": uv_tile_time,
+        "total_time": total_time
+    }
+    time_json_path = os.path.join(opt.outdir, "time_stats.json")
+
+    with open(time_json_path, "w") as f:
+        json.dump(time_stats, f, indent=4)
+
+    # sys.exit(0)
 
 
 if __name__ == '__main__':
+
     main()
+

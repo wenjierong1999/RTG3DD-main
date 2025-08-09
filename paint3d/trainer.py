@@ -15,7 +15,7 @@ from paint3d.models.textured_mesh import TexturedMeshModel
 
 
 def forward_texturing(cfg, dataloaders, mesh_model, save_result_dir, device,
-                      view_imgs=[], view_ids=[], verbose=False):
+                      view_imgs=[], view_ids=[], verbose=False, strict_uncolored_only=True):
     assert len(view_imgs) == len(view_ids), "the number of view_imgs should equal to the number of view_ids"
 
     view_info = {}
@@ -33,7 +33,8 @@ def forward_texturing(cfg, dataloaders, mesh_model, save_result_dir, device,
         theta, phi, radius = view_info[view_id]["pos"]
         target_sd = utils.pil2tensor(Image.fromarray(view_img).convert('RGB').resize((cfg.render.grid_size, cfg.render.grid_size), resample=Image.BILINEAR), device)
         mesh_model.forward_texturing(theta=theta, phi=phi, radius=radius, view_target=target_sd,
-                                     save_result_dir=save_result_dir, view_id=view_id, verbose=verbose)
+                                     save_result_dir=save_result_dir, view_id=view_id, verbose=verbose,
+                                     strict_uncolored_only=strict_uncolored_only)
 
     mesh_model.export_mesh(save_result_dir)
 

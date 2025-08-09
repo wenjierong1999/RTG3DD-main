@@ -1,0 +1,46 @@
+txt2img:
+  "sd_model_key": "runwayml/stable-diffusion-v1-5"
+  "use_customized_unet": true  #new
+  "lora_weights_path": "/scratch/leuven/375/vsc37593/finetune_depth2img_res/debug_lora/checkpoint_0.pt"   #new
+  "customized_unet_weights_path": null  #new 
+  "ip_adapter_image_path": "" # needs to be specified
+  "ip_adapter_key": "ip-adapter_sd15.safetensors"
+  "prompt": "" # needs to be specified
+  "negative_prompt": "strong light, harsh lighting, blurry, noisy, low quality, cluttered, messy, shadow, dirty"
+  "seed": 1713428430
+  "width": 512
+  "height": 512
+  "num_images_per_prompt": 1
+  "guidance_scale": 7.0
+  "num_inference_steps": 20
+  "controlnet_units":
+    - "preprocessor": "none"
+      "controlnet_key": "lllyasviel/control_v11f1p_sd15_depth"
+      "condition_image_path": # needs to be specified
+      "weight": 1.0
+
+inpaint:
+  "sd_model_key": "runwayml/stable-diffusion-v1-5"
+  # run
+  "image_path":
+  "mask_path":
+  "ip_adapter_image_path": 
+  "ip_adapter_key": "ip-adapter_sd15.safetensors"
+  "prompt":
+  "negative_prompt": "strong light, harsh lighting, blurry, noisy, low quality, cluttered, messy, shadow, dirty"
+  "seed":
+  "width": 1024
+  "height": 512
+  "num_images_per_prompt": 1
+  "guidance_scale": 3.0
+  "num_inference_steps": 20
+  "denoising_strength": 1.0
+  "controlnet_units":
+    - "preprocessor": "none"
+      "controlnet_key": "lllyasviel/control_v11f1p_sd15_depth"
+      "condition_image_path":
+      "weight": 1.0
+    - "preprocessor": "inpaint_global_harmonious"
+      "controlnet_key": "lllyasviel/control_v11p_sd15_inpaint"
+      "condition_image_path": ""
+      "weight": 0.5

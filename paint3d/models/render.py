@@ -182,7 +182,7 @@ class Renderer:
             if self.calcu_uncolored_mode == "WarpGrid":
                 texture_map_diff = (texture_map.detach() - torch.tensor(texture_default_color).view(1, 3, 1, 1).
                                     to(self.device)).abs().sum(axis=1)
-                uncolored_texture_map = (texture_map_diff < 0.1).float().unsqueeze(0)
+                uncolored_texture_map = (texture_map_diff < 0.05).float().unsqueeze(0)
 
                 uncolored_mask = kal.render.mesh.texture_mapping(uv_features, uncolored_texture_map,
                                                                  mode=self.interpolation_mode)

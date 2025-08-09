@@ -9,6 +9,7 @@ from pathlib import Path
 import sys
 import warnings
 from PIL import Image
+import subprocess
 warnings.filterwarnings("ignore", message="Error importing kaolin.visualize.ipython")
 
 from paint3d.models.textured_mesh import TexturedMeshModel
@@ -33,7 +34,27 @@ def parse_args():
     parser.add_argument('--max_sample_number', type=int, default=-1, help='Max number of models to process (default: all)')
     parser.add_argument('--dry_run', action='store_true', help='Print commands without executing')
 
+    # debug mode
+    parser.add_argument('--model_id', type=str, default=None, help='Debug mode: process only a single model_id')
+
     return parser.parse_args()
+
+def run_subprocess_command(command_str, dry_run=False):
+    """
+    Safely run a shell command using subprocess (instead of os.system).
+    Handles CUDA context issues more gracefully.
+    """
+    print("[COMMAND]", command_str)
+    if dry_run:
+        print("[DRY RUN] Skipping actual execution.")
+        return 0
+    
+    try:
+        result = subprocess.run(command_str, shell=True, check=True)
+        return result.returncode
+    except subprocess.CalledProcessError as e:
+        print(f"[ERROR] Subprocess failed with code {e.returncode}: {e.cmd}")
+        return e.returncode
 
 def load_render_cfg_from_pyfile(config_path: str):
     """
@@ -108,6 +129,13 @@ def render_multi_views(model_id, final_outdir, category_views_root, render_cfg, 
         image_pil.save(view_path)
         print(f"[INFO] Saved view {i} for {model_id} → {view_path}")
 
+        #IMPORTANT
+    del model
+    torch.cuda.empty_cache()
+    torch.cuda.ipc_collect()
+    torch.cuda.synchronize()
+    gc.collect()
+
 
     # raise NotImplementedError
 
@@ -134,13 +162,24 @@ def get_model_ids(category, split_file_root):
 
 def main():
 
+    print("[INFO] Using GPU:", os.environ.get("CUDA_VISIBLE_DEVICES"))
+    print("[INFO] CUDA device:", torch.cuda.current_device(), torch.cuda.get_device_name())
+
+    sys.stdout.flush()
+
     args = parse_args()
-    model_ids = get_model_ids(args.category, args.split_file_root)
+    if args.model_id is not None:
+        model_ids = [args.model_id]
+        print(f"[DEBUG] Processing only model_id: {args.model_id}")
+    else:
+        model_ids = get_model_ids(args.category, args.split_file_root)
 
     if args.max_sample_number > 0:
         model_ids = model_ids[:args.max_sample_number]
     
     print(f"[INFO] Processing {len(model_ids)} models from category '{args.category}'")
+
+    all_total_times = []  # Store total times for each model
 
     for idx, model_id in enumerate(model_ids):
 
@@ -170,7 +209,14 @@ def main():
             print("[DRY RUN - STAGE 1]", cmd_stage1)
         else:
             os.makedirs(outdir_stage1, exist_ok=True)
-            os.system(cmd_stage1)
+
+            # os.system(cmd_stage1)
+
+            ret = run_subprocess_command(cmd_stage1, dry_run=args.dry_run)
+            if ret != 0:
+                print(f"[ERROR] Stage 1 failed for {model_id}, skipping.")
+                continue
+
             torch.cuda.empty_cache()
             gc.collect()
         
@@ -202,8 +248,10 @@ def main():
                 else:
                     os.makedirs(outdir_stage2, exist_ok=True)
                     print(f"[INFO] Running Stage 2 for {model_id}")
-                    os.system(cmd_stage2)
-        
+                    # os.system(cmd_stage2)
+                    ret = run_subprocess_command(cmd_stage2, dry_run=args.dry_run)
+                    if ret != 0:
+                        print(f"[ERROR] Stage 2 failed for {model_id}.")
                 # === Memory cleanup ===
             torch.cuda.empty_cache()
             gc.collect()
@@ -233,7 +281,7 @@ def main():
 
         if args.use_stage_2:
             outdir_stage2 = os.path.join(args.output_root, args.category, model_id, 'img_stage2')
-            albedo_stage2 = os.path.join(outdir_stage2, 'tile_res_0', 'albedo.png')
+            albedo_stage2 = os.path.join(outdir_stage2, 'UV_inpaint_res_0.png')
             if os.path.exists(albedo_stage2):
                 shutil.copy(albedo_stage2, os.path.join(final_outdir, 'albedo.png'))
             elif os.path.exists(albedo_stage1):
@@ -246,26 +294,50 @@ def main():
             else:
                 print(f"[WARNING] No albedo texture found for {model_id}")
         
-        # === Optional FID View Rendering ===
-        render_cfg_obj = load_render_cfg_from_pyfile(args.render_config)
-        category_views = os.path.join(args.output_root, args.category + "_views")
-        os.makedirs(category_views, exist_ok=True)
+        # 3. Load timing info from stage1 + stage2 
+        time_stage1_path = os.path.join(outdir_stage1, "time_stats.json")
+        time_stage2_path = os.path.join(outdir_stage2, "time_stats.json") if args.use_stage_2 else None
+
+        total_time = 0.0
+
 
         try:
-            render_multi_views(
-                model_id=model_id,
-                final_outdir=final_outdir,
-                category_views_root=category_views,
-                render_cfg=render_cfg_obj,
-                num_views=8
-            )
+            if os.path.exists(time_stage1_path):
+                with open(time_stage1_path, "r") as f:
+                    time_info1 = json.load(f)
+                    total_time += time_info1.get("total_time", 0.0)
+            else:
+                print(f"[WARNING] Missing stage1 time_stats.json for {model_id}")
+
+            if time_stage2_path and os.path.exists(time_stage2_path):
+                with open(time_stage2_path, "r") as f:
+                    time_info2 = json.load(f)
+                    total_time += time_info2.get("total_time", 0.0)
+            elif args.use_stage_2:
+                print(f"[WARNING] Missing stage2 time_stats.json for {model_id}")
         except Exception as e:
-            print(f"[WARNING] View rendering failed for {model_id}: {e}")
+            print(f"[ERROR] Failed to read time stats for {model_id}: {e}")
+        
+        all_total_times.append(total_time)
+        print(f"[INFO] Total processing time for {model_id}: {total_time:.2f} sec")
 
+    # save processing summary
+    if len(all_total_times) > 0:
+        avg_time = sum(all_total_times) / len(all_total_times)
+        time_summary = {
+            "category": args.category,
+            "num_models": len(all_total_times),
+            "avg_total_time": avg_time,
+            "per_model_total_times": all_total_times,
+        }
 
+        summary_path = os.path.join(args.output_root, args.category, "time_summary.json")
+        os.makedirs(os.path.dirname(summary_path), exist_ok=True)
+        with open(summary_path, "w") as f:
+            json.dump(time_summary, f, indent=4)
 
+        print(f"[INFO] Saved timing summary to {summary_path}")
 
-    
     print("[INFO] All models processed.")
 
 if __name__ == '__main__':

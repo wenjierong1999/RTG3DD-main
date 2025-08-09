@@ -1,9 +1,10 @@
 txt2img:
   "sd_model_key": "runwayml/stable-diffusion-v1-5"
   "use_customized_unet": true  #new
-  "lora_weights_path": "/scratch/leuven/375/vsc37593/finetune_depth2img_res/debug_lora/checkpoint_12000.pt"   #new
+  "lora_weights_path": "/scratch/leuven/375/vsc37593/finetune_expr_v2/lora_with_camera/checkpoint_15000.pt"   #new
   "customized_unet_weights_path": null  #new 
   "ip_adapter_image_path": "" # needs to be specified
+  "ip_adapter_key": "ip-adapter-plus_sd15.safetensors"
   "prompt": "" # needs to be specified
   "negative_prompt": "strong light, harsh lighting, blurry, noisy, low quality, cluttered, messy, shadow, dirty"
   "seed": 1713428430
@@ -24,10 +25,11 @@ inpaint:
   "image_path":
   "mask_path":
   "ip_adapter_image_path": 
+  "ip_adapter_key": "ip-adapter-plus_sd15.safetensors"
   "prompt":
   "negative_prompt": "strong light, harsh lighting, blurry, noisy, low quality, cluttered, messy, shadow, dirty"
   "seed":
-  "width": 512
+  "width": 1024
   "height": 512
   "num_images_per_prompt": 1
   "guidance_scale": 3.0

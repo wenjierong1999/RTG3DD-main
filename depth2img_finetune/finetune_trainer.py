@@ -8,32 +8,14 @@ from torchvision import transforms
 from accelerate import Accelerator
 from PIL import Image
 from transformers import get_cosine_schedule_with_warmup
+from cleanfid import fid
 from diffusers import StableDiffusionControlNetPipeline, ControlNetModel, EulerAncestralDiscreteScheduler, UNet2DConditionModel
+import argparse
+import shutil
 
 from Customized_Unet import UNetFuseTimeCamera
 # from lora_utils import add_lora_to_unet
-from Depth2ImgFineTuneDataset import get_dataloader, Depth2ImgFineTuneDataset
-
-def check_tensor(name, x):
-    if not isinstance(x, torch.Tensor):
-        print(f"[WARNING] {name} is not a tensor")
-        return
-    if torch.isnan(x).any():
-        print(f"[ERROR] {name} contains NaN!")
-    if torch.isinf(x).any():
-        print(f"[ERROR] {name} contains Inf!")
-    if x.abs().max() > 1e4:
-        print(f"[WARNING] {name} has large values: max={x.abs().max().item()}")
-    if x.abs().min() < 1e-8:
-        print(f"[WARNING] {name} has tiny values: min={x.abs().min().item()}")
-    print(f"[DEBUG] {name} stats: shape={x.shape}, min={x.min().item():.2f}, max={x.max().item():.2f}")
-
-def debug_check(name, tensor):
-    if torch.isnan(tensor).any():
-        print(f"[FATAL] {name} contains NaN!")
-    if torch.isinf(tensor).any():
-        print(f"[FATAL] {name} contains Inf!")
-    print(f"[DEBUG] {name} → shape={tuple(tensor.shape)}, min={tensor.min().item():.3f}, max={tensor.max().item():.3f}")
+from Depth2ImgFineTuneDataset import get_dataloader, Depth2ImgFineTuneDataset, collect_split_ids
 
 
 class Depth2ImgTrainer:
@@ -44,9 +26,11 @@ class Depth2ImgTrainer:
                 val_loader = None, 
                 customized_unet=None,
                 use_camera_label=False,
+                use_directional_prompts=False,
                 output_dir="results/depth2img", 
+                fid_gt_dir=None,
                 use_lora=False, 
-                lora_rank=4, 
+                lora_rank=8, 
                 lr=1e-5,
                 num_epochs=10,
                 eval_interval=500, # step
@@ -80,6 +64,7 @@ class Depth2ImgTrainer:
         self.sd_cfg = sd_cfg
         self.customized_unet = customized_unet
         self.use_camera_label = use_camera_label
+        self.use_directional_prompts = use_directional_prompts
 
         # dataloader setting
         self.train_loader = train_loader
@@ -87,6 +72,7 @@ class Depth2ImgTrainer:
 
         # training setting
         self.output_dir = output_dir
+        self.fid_gt_dir = fid_gt_dir
         self.use_lora = use_lora
         self.lora_rank = lora_rank
         self.lr = lr
@@ -128,7 +114,6 @@ class Depth2ImgTrainer:
         )
 
         # 3. Replace with customized UNet
-
         self.use_customized_unet = self.customized_unet is not None
         if self.customized_unet is not None:
             # Load base weights
@@ -274,8 +259,13 @@ class Depth2ImgTrainer:
                 depth = depth.view(B * V, C, H, W).to(self.device)
                 view_dir = view_dir.view(B * V, -1).to(self.device)
 
+                if self.use_directional_prompts:
+                    flat_prompts = [p for plist in prompts for p in plist]
+                else:
+                    flat_prompts = [" "] * (B * V)
+
                 # === 2. Prompt encoding (with negative prompt support) ===
-                flat_prompts = [p for plist in prompts for p in plist]
+                # flat_prompts = [p for plist in prompts for p in plist]
                 negative_prompt = self.sd_cfg.get("negative_prompt", None)
                 negative_prompt = [negative_prompt] * len(flat_prompts)
 
@@ -440,7 +430,7 @@ class Depth2ImgTrainer:
                             torch.save(self.accelerator.unwrap_model(self.pipe.unet).state_dict(), ckpt_path)
                             self.accelerator.print(f"Saved UNet checkpoint: {ckpt_path}")
                         #TODO: periodical evaluation
-                        self.evaluate(num_batches=20, empty_prompt=False)
+                        self.evaluate(grid_samples=20)
 
                         # === Save full resume state (overwrite)
                         resume_path = os.path.join(self.output_dir, "state_latest")
@@ -452,11 +442,14 @@ class Depth2ImgTrainer:
                 # self._set_train_scheduler()  # restore for next training step
 
     @torch.no_grad()
-    def evaluate(self, num_batches=1, empty_prompt=False):
+    def evaluate(self, empty_prompt=False,
+                 cache_individual_views=True,
+                 grid_samples=2):
 
         self.guidance_scale = self.sd_cfg.get("guidance_scale", 7.5)
         self.do_classifier_free_guidance = self.guidance_scale > 1.0
 
+        # set pipe to evaluation mode
         self.pipe.unet.eval()
         self.pipe.vae.eval()
         self.pipe.controlnet.eval()
@@ -468,14 +461,19 @@ class Depth2ImgTrainer:
         # === fallback to train_loader if val_loader is None ===
         eval_loader = self.val_loader if self.val_loader is not None else self.train_loader
         self.accelerator.print(f"Using {'val_loader' if self.val_loader is not None else 'train_loader'} for evaluation.")
+        
+        # === create output folders
+        eval_cache_dir = os.path.join(self.output_dir, "eval_cache", f"eval_cache_step{self.global_step}")
+        eval_grid_dir = os.path.join(self.output_dir, "eval_grid")
 
-        val_iter = iter(eval_loader)
+        if self.accelerator.is_main_process:
+            if cache_individual_views:
+                if os.path.exists(eval_cache_dir):
+                    shutil.rmtree(eval_cache_dir)
+                os.makedirs(eval_cache_dir, exist_ok=True)
+            os.makedirs(eval_grid_dir, exist_ok=True)
 
-        for idx in range(num_batches):
-            try:
-                batch = next(val_iter)
-            except StopIteration:
-                break
+        for idx, batch in tqdm(enumerate(eval_loader), total=len(eval_loader), desc=f"[Eval @ step {self.global_step}]"):
 
             rgb = batch["rgb"]            # (B, V, 3, H, W)
             depth = batch["depth"]        # (B, V, 3, H, W)
@@ -492,7 +490,7 @@ class Depth2ImgTrainer:
 
             
             flat_prompts = [p for plist in prompts for p in plist]
-            if empty_prompt:
+            if not self.use_directional_prompts:
                 flat_prompts = [" "] * len(flat_prompts)
             negative_prompt = self.sd_cfg.get("negative_prompt", None)
             negative_prompt = [negative_prompt] * len(flat_prompts)
@@ -523,12 +521,6 @@ class Depth2ImgTrainer:
             # === Initial noise ===
             latents = torch.randn((B * V, self.pipe.unet.in_channels, H // 8, W // 8),
                                 device=self.device, dtype=torch.float32)
-            
-            # timesteps = eval_scheduler.timesteps
-            # self.pipe.scheduler.set_timesteps(self.sd_cfg['num_inference_steps'], device=self.device)
-            # # self.pipe.scheduler.step_index = 0 
-            # timesteps = self.pipe.scheduler.timesteps
-
             scheduler = self.eval_scheduler
             scheduler.set_timesteps(self.sd_cfg['num_inference_steps'], device=self.device)
             timesteps = scheduler.timesteps
@@ -553,7 +545,6 @@ class Depth2ImgTrainer:
                 )
                 
                 # breakpoint()
-
                 if self.use_customized_unet:
 
                     if self.use_camera_label:
@@ -561,7 +552,8 @@ class Depth2ImgTrainer:
                         view_dir_emb = None
                     else:
                         unet_class_labels = None
-                        view_dir_emb = torch.cat([view_dir] * 2) if self.do_classifier_free_guidance else view_dir
+                        # view_dir_emb = torch.cat([view_dir] * 2) if self.do_classifier_free_guidance else view_dir
+                        view_dir_emb = None
                         
                     noise_pred = self.pipe.unet(
                         sample=latent_input,
@@ -599,36 +591,91 @@ class Depth2ImgTrainer:
             images = (images.clamp(-1, 1) + 1) / 2.0  # Normalize to [0, 1]
             images = images.cpu()
 
-            # === Get GT images ===
-            gt_images = batch["rgb"].view(B * V, 3, H, W).cpu()
+            if idx < grid_samples:
+                gt_images = batch["rgb"].view(B * V, 3, H, W).cpu()
+                gen_grid = make_grid(images, nrow=V)
+                gt_grid = make_grid(gt_images, nrow=V)
+                full_grid = torch.cat([gen_grid, gt_grid], dim=1)
+                grid_save_path = os.path.join(eval_grid_dir, f"eval_grid_{model_id[0]}_{self.global_step}.png")
+                save_image(full_grid, grid_save_path)
+                self.accelerator.print(f"[Eval] Saved view grid image to {grid_save_path}")
+            
+            # === Save individual view images for fid computation
+            if cache_individual_views:
+                for i, img in enumerate(images):
+                    model_name = model_id[i // V]
+                    view_idx = i % V
+                    save_path = os.path.join(eval_cache_dir, f"{model_name}_view_{view_idx}.png")
+                    save_image(img, save_path)
+            
+        # === After all batches, compute FID if GT folder provided
+        if self.fid_gt_dir is not None and self.accelerator.is_main_process:
 
-            # === Create grids ===
-            gen_grid = make_grid(images, nrow=V)    # top row: generated images
-            gt_grid = make_grid(gt_images, nrow=V)  # bottom row: ground truth images
-            full_grid = torch.cat([gen_grid, gt_grid], dim=1)
-            save_path = os.path.join(self.output_dir, f"eval_step_{self.global_step}__{model_id[0]}_views.png")
-            save_image(full_grid, save_path)
+            fid_score = fid.compute_fid(
+                self.fid_gt_dir,
+                eval_cache_dir,
+                mode="clean",
+                num_workers=4
+            )
+            self.accelerator.print(f"[FID] Step {self.global_step}: {fid_score:.4f}")
 
-            self.accelerator.print(f"[Eval] Saved 4-view image (gen + GT) grid to {save_path}")
-        
-            # === Restore scheduler state ===
-        # self.pipe.scheduler.timesteps = original_timesteps
-        # if original_step_index is not None:
-        #     self.pipe.scheduler.step_index = original_step_index
+                        # Save to file
+            fid_log_file = os.path.join(self.output_dir, "fid_scores.csv")
+            header = "step,fid\n"
+            line = f"{self.global_step},{fid_score:.4f}\n"
+            if not os.path.exists(fid_log_file):
+                with open(fid_log_file, "w") as f:
+                    f.write(header)
+                    f.write(line)
+            else:
+                with open(fid_log_file, "a") as f:
+                    f.write(line)
 
-            # breakpoint()
 
-        # raise NotImplementedError
+
+def parse_args():
+
+    parser = argparse.ArgumentParser(description="Depth2Img Training / Evaluation")
+
+    # I/O
+    parser.add_argument("--output_dir", type=str, required=True, help="Output directory")
+    parser.add_argument("--fid_gt_dir", type=str, default=None, help="GT folder for FID")
+
+    # Mode
+    parser.add_argument("--eval_only", action="store_true", help="Only run evaluation")
+    parser.add_argument("--resume", action="store_true", help="Resume training")
+
+    # Model training
+    parser.add_argument("--batch_size", type=int, default=4)
+    parser.add_argument("--max_steps", type=int, default=25000)
+    parser.add_argument("--lr", type=float, default=5e-7)
+    parser.add_argument("--num_epochs", type=int, default=5)
+    parser.add_argument("--eval_interval", type=int, default=500)
+    parser.add_argument("--log_interval", type=int, default=20)
+
+    # Architecture options
+    parser.add_argument("--use_customized_unet", action="store_true", help="Use customized UNetFuseTimeCamera")
+    parser.add_argument("--use_lora", action="store_true")
+    parser.add_argument("--lora_rank", type=int, default=8)
+    parser.add_argument("--use_camera_label", action="store_true")
+    parser.add_argument("--use_directional_prompts", action="store_true")
+
+    return parser.parse_args()
+
+
 
 if __name__ == "__main__":
 
+    args = parse_args()
+
+    # basic config for loading sd pipelines
     config = {
     "sd_model_key": "runwayml/stable-diffusion-v1-5",
     "ip_adapter_image_path": "/scratch/leuven/375/vsc37593/3D-FUTURE-model/0b9f1125-92d6-4be2-9503-22200d4c7e16/image.jpg",  # 可设为 None
     "prompt": "A modern furniture from front view",
     # "negative_prompt": "strong light, Bright light, intense light, dazzling light, brilliant light, radiant light, Shade, darkness, silhouette, dimness, obscurity, shadow, glasses",
     "negative_prompt": "strong light, harsh lighting, blurry, noisy, low quality, cluttered, messy, shadow, dirty",
-    "seed": 1713428430,
+    "seed": 912240,
     "width": 512,
     "height": 512,
     "num_images_per_prompt": 1,
@@ -644,47 +691,57 @@ if __name__ == "__main__":
     ]
         }
     
-    train_loader = get_dataloader(root='/scratch/leuven/375/vsc37593/finetune_depth2img_3dfuture', batch_size=4)
-    unet_config = UNet2DConditionModel.load_config(config["sd_model_key"], subfolder="unet")
-    unet_config["class_embed_type"] = "timestep"
+    # val_loader, train_loader = get_dataloader(root='/scratch/leuven/375/vsc37593/finetune_depth2img_3dfuture', batch_size=4)
 
-    customized_unet = UNetFuseTimeCamera.from_config(unet_config)
+    dataset_root = '/scratch/leuven/375/vsc37593/finetune_depth2img_3dfuture'
+    train_ids, test_ids = collect_split_ids(max_test_per_category=40)
 
-    # trainer = Depth2ImgTrainer(
-    #     sd_cfg=config,
-    #     train_loader=train_loader,
-    #     val_loader=None,
-    #     customized_unet=customized_unet,
-    #     output_dir="/scratch/leuven/375/vsc37593/finetune_depth2img_res/debug_run2",
-    #     lr=1e-6,
-    #     num_epochs=2,
-    #     eval_interval=1000,  # Skip eval to only test one epoch
-    #     log_interval=20,
-    #     resume=False,
-    #     max_train_steps=10
-    # )
+    train_loader = get_dataloader(
+        root=dataset_root,
+        batch_size=4,
+        views_per_model=4,
+        model_ids=train_ids, #MODIFIED
+        shuffle=False
+    )
+
+    # test dataloader
+    test_loader = get_dataloader(
+        root=dataset_root,
+        batch_size=4,
+        views_per_model=4,
+        model_ids=test_ids,
+        shuffle=False
+    )
+    if args.use_customized_unet:
+        unet_config = UNet2DConditionModel.load_config(config["sd_model_key"], subfolder="unet")
+        if args.use_camera_label:
+            unet_config["class_embed_type"] = "timestep"
+        customized_unet = UNetFuseTimeCamera.from_config(unet_config)
+    else:
+        customized_unet = None
 
     trainer = Depth2ImgTrainer(
         sd_cfg=config,
         train_loader=train_loader,
-        val_loader=None,
+        val_loader=test_loader,
         customized_unet=customized_unet,
-        lora_rank=8,
-        use_lora=True,
-        use_camera_label=True,
-        output_dir="/scratch/leuven/375/vsc37593/finetune_depth2img_res/debug_lora2",
-        lr=1e-6,
-        num_epochs=5,
-        eval_interval=1000,  # Skip eval to only test one epoch
-        log_interval=20,
+        use_camera_label=args.use_camera_label,
+        use_directional_prompts=args.use_directional_prompts,
+        use_lora=args.use_lora, # if finetune the whole unet
+        output_dir=args.output_dir,
+        fid_gt_dir=args.fid_gt_dir,
+        lr=args.lr,
+        num_epochs=args.num_epochs,
+        eval_interval=args.eval_interval,  # Skip eval to only test one epoch
+        log_interval=args.log_interval,
         resume=False,
-        max_train_steps=25000
+        max_train_steps=args.max_steps
     )
 
 
     trainer.train()
 
-    # trainer.evaluate(num_batches=10, empty_prompt=False)
+    # trainer.evaluate(grid_samples=20)
 
 
             

@@ -10,6 +10,8 @@ import numpy as np
 from PIL import Image
 from pathlib import Path
 from omegaconf import OmegaConf
+from torchvision import transforms
+import gc
 
 from controlnet.diffusers_cnet_txt2img import txt2imgControlNet
 from controlnet.diffusers_cnet_inpaint import inpaintControlNet
@@ -84,7 +86,9 @@ def gen_init_view(sd_cfg, cnet, mesh_model, dataloaders, outdir, view_ids=[]):
         init_depth_map.append(depth_render)
 
     init_depth_map = torch.cat(init_depth_map, dim=0).repeat(1, 3, 1, 1)
-    init_depth_map = torchvision.utils.make_grid(init_depth_map, nrow=2, padding=0)
+
+    #DEBUG
+    init_depth_map = torchvision.utils.make_grid(init_depth_map, nrow=len(init_depth_map), padding=0)
     save_path = os.path.join(outdir, f"init_depth_render.png")
     utils.save_tensor_image(init_depth_map.unsqueeze(0), save_path=save_path)
 
@@ -141,11 +145,30 @@ def gen_init_view_finetuned(sd_cfg, cnet, mesh_model, dataloaders, outdir, view_
         else:
             camera_label_tensor = torch.tensor(camera_labels, dtype=torch.long).to(cnet.device)
     
-    init_depth_grid = torchvision.utils.make_grid(torch.stack(init_depth_map), nrow=2, padding=0)
+    init_depth_grid = torchvision.utils.make_grid(torch.stack(init_depth_map), 
+                                                  nrow=len(init_depth_map), 
+                                                  padding=0)
     save_path = os.path.join(outdir, f"init_depth_render.png")
     utils.save_tensor_image(init_depth_grid.unsqueeze(0), save_path=save_path)
 
-    cond_img = torch.stack(init_depth_map).to(cnet.device)
+    # === Apply dilation to the saved image ===
+    depth_dilated = utils.dilate_depth_outline(save_path, iters=5, dilate_kernel=3)
+    dilated_path = os.path.join(outdir, f"init_depth_dilated.png")
+    cv2.imwrite(dilated_path, depth_dilated)
+
+    # breakpoint()
+    # === Convert dilated result to Tensor ===
+    depth_dilated_rgb = cv2.cvtColor(depth_dilated, cv2.COLOR_GRAY2RGB)
+    split_images = utils.split_grid_image(depth_dilated_rgb, size=(1, len(init_depth_map))) 
+
+    # cond_img = depth_dilated_tensor.repeat(len(init_depth_map), 1, 1, 1).to(cnet.device)
+
+    # 3. 转为 tensor → (B, 3, H, W)
+    cond_img = torch.stack([
+        transforms.ToTensor()(Image.fromarray(img)) for img in split_images
+    ]).to(cnet.device)
+    # cond_img = torch.stack(init_depth_map).to(cnet.device)
+    
     # print(cond_img.shape)
     camera_label_tensor = torch.tensor(camera_labels, dtype=torch.long).to(cnet.device)
     # print(camera_label_tensor)
@@ -254,6 +277,12 @@ def parse():
         default="outputs/inpainting-samples"
     )
 
+    # parser.add_argument(
+    #     "--strict_uncolored_only",
+    #     action="store_true",
+    #     help="Only update regions that have not been painted (default_color) during texture fusion"
+    # )
+
     opt = parser.parse_args()
     return opt
 
@@ -262,6 +291,11 @@ def main():
     print("Depth-based 3D Texturing")
     opt = parse()
     sd_cfg, render_cfg = init_process(opt)
+
+    if render_cfg.render.strict_uncolored_only:
+        print("[INFO] Strict uncolored mode enabled: Only updating regions with default color.")
+    else:
+        print("[INFO] Standard texture update: Updating all regions with valid projection.")
 
     # ===  1. create model and data
     device = torch.device("cuda")
@@ -318,7 +352,15 @@ def main():
         start_t = time.time()
         mesh_model.initial_texture_path = None
         mesh_model.refresh_texture()
-        view_imgs = utils.split_grid_image(img=np.array(init_image), size=(1, 2))
+
+        grid_img = np.array(init_image)               # (H, W, C)
+        h, w = grid_img.shape[:2]                     # total height, width
+        single_w = h  
+        col = w // single_w                           
+
+        # breakpoint()
+
+        view_imgs = utils.split_grid_image(img=np.array(init_image), size=(1, col))
 
         # breakpoint()
 
@@ -331,6 +373,7 @@ def main():
             view_imgs=view_imgs,
             view_ids=render_cfg.render.views_init,
             verbose=False,
+            strict_uncolored_only=render_cfg.render.strict_uncolored_only
         )
         print(f"init DR time: {time.time() - start_t}")
 
@@ -364,11 +407,13 @@ def main():
                 view_imgs=view_imgs,
                 view_ids=view_group,
                 verbose=False,
+                strict_uncolored_only=render_cfg.render.strict_uncolored_only
             )
             print(f"inpaint DR time: {time.time() - start_t}")
 
+        total_time = time.time() - total_start
 
-        print(f"total processed time:{time.time() - total_start}")
+        print(f"total processed time:{total_time}")
         mesh_model.initial_texture_path = f"{outdir}/albedo.png"
         mesh_model.refresh_texture()
         dr_eval(
@@ -386,6 +431,44 @@ def main():
     del depth_cnet
     del inpaint_cnet
 
+    torch.cuda.empty_cache()
+    gc.collect()
+
+    # 再加这个
+    torch.cuda.ipc_collect()
+
+    # 打印确认
+    print("[INFO] Freed GPU memory at end of stage1.")
+
+        # === Save timing to JSON ===
+    import json
+
+    total_time = time.time() - total_start
+    time_stats = {
+        "total_time": total_time
+    }
+
+    time_json_path = os.path.join(opt.outdir, "time_stats.json")
+    with open(time_json_path, "w") as f:
+        json.dump(time_stats, f, indent=4)
+
+
+
+    sys.exit(0)
+
+
 
 if __name__ == '__main__':
     main()
+
+
+    # torch.cuda.empty_cache()
+    # gc.collect()
+
+    # # 再加这个
+    # torch.cuda.ipc_collect()
+
+    # # 打印确认
+    # print("[INFO] Freed GPU memory at end of stage1.")
+
+    # sys.exit(0)

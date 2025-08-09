@@ -1,0 +1,24 @@
+_target_: src.datamodule.shapenet_datamodule.ShapeNetDataModule
+dataset_type: 'coarse'
+data_detail: 
+  data_folder: ${paths.data_dir} # Modified
+  mesh_file:  'uv_texture_512.obj'
+  mask_file: 'uv_mask_512.png'
+  texture_file: 'uv_texture_512.png'
+  position_file: 'uv_position_512.npz'
+  uv_folder: ${.data_folder}/uv_model_512
+  model_folder: ${.uv_folder}
+  category: ??? # specify the category in experiment yaml
+  split_files: ${.data_folder}/final_split_files
+  coarse_point_folder: ${.data_folder}/coarse_model/${.category}/save_4096
+  flag_csv: ${paths.flag_csv} # new added
+  image_folder: ${.data_folder}/clip_image_data/${.category}
+  test_samples: False
+
+data_split:
+  train_split: train
+  val_split: test
+  test_split: test
+batch_size: ??? # specify bs in experiment.yaml
+num_workers: 8
+pin_memory: True

@@ -5,6 +5,24 @@ import torch.nn as nn
 from diffusers import UNet2DConditionModel
 import torch
 
+class SinusoidalEmbedding(nn.Module):
+    def __init__(self, in_dims: int, n_freqs: int = 6, base_freq: float = 1.0, include_input: bool = False):
+        super().__init__()
+        self.in_dims = in_dims
+        self.n_freqs = n_freqs
+        self.include_input = include_input
+        freq_bands = [base_freq * (2 ** i) for i in range(n_freqs)]
+        self.register_buffer("freq_bands", torch.tensor(freq_bands, dtype=torch.float32), persistent=False)
+
+    def forward(self, x): 
+        xb = x.unsqueeze(-1) * self.freq_bands  # [B, in_dims, n_freqs]
+        emb = torch.cat([torch.sin(xb), torch.cos(xb)], dim=-1)  # [B, in_dims, 2*n_freqs]
+        emb = emb.reshape(x.shape[0], -1)  # [B, in_dims*2*n_freqs]
+        if self.include_input:
+            emb = torch.cat([x, emb], dim=-1)
+        return emb
+
+
 class UNetFuseTimeCamera(UNet2DConditionModel):
 
     def __init__(self, cam_dim=12, **kwargs):
@@ -18,6 +36,7 @@ class UNetFuseTimeCamera(UNet2DConditionModel):
         # lazy init camera mlp
         if self.camera_mlp is None:
             self.camera_mlp = nn.Sequential(
+                # SinusoidalEmbedding(self.cam_dim, n_freqs=n_freqs, base_freq=1.0, include_input=include_input), #need further check
                 nn.Linear(self.cam_dim, 128),
                 nn.ReLU(),
                 nn.Linear(128, t_emb.shape[-1])  # same dim as t_emb
@@ -39,7 +58,7 @@ class UNetFuseTimeCamera(UNet2DConditionModel):
         # print(">> encoder_hidden_states:", kwargs["encoder_hidden_states"].shape)  # [B, 77, 768]
         # print(">> view_dir_emb:", view_dir_emb.shape if view_dir_emb is not None else "None")
         out = super().forward(*args, **kwargs)
-        self._cached_camera = None  # 清理，避免跨 batch
+        self._cached_camera = None 
         return out
 
     @classmethod

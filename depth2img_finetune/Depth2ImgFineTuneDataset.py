@@ -9,7 +9,8 @@ from torch.utils.data import DataLoader
 class Depth2ImgFineTuneDataset(Dataset):
 
     def __init__(self, root_dir, views_per_model=4, image_size=(512, 512), transform=None,
-                 raw_data_dir = '/scratch/leuven/375/vsc37593/3D-FUTURE-model'):
+                 raw_data_dir = '/scratch/leuven/375/vsc37593/3D-FUTURE-model',
+                 model_ids = None):
         super().__init__()
         self.root_dir = root_dir
         self.raw_data_dir = raw_data_dir
@@ -18,7 +19,13 @@ class Depth2ImgFineTuneDataset(Dataset):
         self.transform = transform
 
         self.model_folders = []
-        for model_id in sorted(os.listdir(root_dir)):
+
+        if model_ids is not None:
+            candidate_ids = sorted(model_ids)
+        else:
+            candidate_ids = sorted(os.listdir(root_dir))
+
+        for model_id in candidate_ids:
             model_path = os.path.join(root_dir, model_id)
             if os.path.isdir(model_path):
                 views = sorted([v for v in os.listdir(model_path) if v.startswith("view_")])
@@ -102,34 +109,92 @@ class Depth2ImgFineTuneDataset(Dataset):
             "cond_img_path": cond_img_path # str
         }
 
-def get_dataloader(root, batch_size, views_per_model=4, transform=None):
+def get_dataloader(root, batch_size, views_per_model=4, transform=None,
+                   model_ids=None, shuffle=False):
 
     assert batch_size % views_per_model == 0
     dataset = Depth2ImgFineTuneDataset(
         root_dir=root,
         views_per_model=views_per_model,
-        transform=transform
+        transform=transform,
+        model_ids=model_ids
     )
-    return DataLoader(dataset, batch_size=batch_size // views_per_model, shuffle=False, num_workers=4)
+    return DataLoader(dataset, 
+                      batch_size=batch_size // views_per_model, 
+                      shuffle=False, 
+                      num_workers=4)
+
+def collect_split_ids(split_root = '/data/leuven/375/vsc37593/my_py_projects/RTG3DD-main/future3d-preprocess/final_split_files',
+                     max_test_per_category=40):
+
+    categories = ['Chair', 'Table', 'Sofa', 'Bed']
+    train_ids, test_ids = [], []
+
+    for cat in categories:
+        cat_dir = os.path.join(split_root, cat)
+        train_lst_path = os.path.join(cat_dir, 'train.lst')
+        test_lst_path = os.path.join(cat_dir, 'test.lst')
+
+        if os.path.exists(train_lst_path):
+            with open(train_lst_path, 'r') as f:
+                ids = [line.strip() for line in f if line.strip()]
+                train_ids.extend(ids)
+
+        if os.path.exists(test_lst_path):
+            with open(test_lst_path, 'r') as f:
+                ids = [line.strip() for line in f if line.strip()]
+                test_ids.extend(ids[:max_test_per_category])
+    
+    return train_ids, test_ids
 
 if __name__ == "__main__":
 
     dataset_root = '/scratch/leuven/375/vsc37593/finetune_depth2img_3dfuture'
-    test_dataset = Depth2ImgFineTuneDataset(
-        root_dir=dataset_root
-    )
+    # test_dataset = Depth2ImgFineTuneDataset(
+    #     root_dir=dataset_root
+    # )
 
-    sample = test_dataset[9]
+    # sample = test_dataset[9]
 
-    print("model_id:", sample['model_id'])
-    print("prompt:", sample['prompt'])  # list[str], 每个 view 一个 prompt
-    print("rgb shape:", sample['rgb'].shape)         # [V, 3, H, W]
-    print("depth shape:", sample['depth'].shape)     # [V, 1, H, W]
-    print("camera_pos_label:", sample['camera_pos_label'])  # list[int],
-    print("view_dir shape:", sample['view_dir'].shape)  # [V, 12]
-    print(sample['cond_img_path'])
+    # print("model_id:", sample['model_id'])
+    # print("prompt:", sample['prompt'])  # list[str], 每个 view 一个 prompt
+    # print("rgb shape:", sample['rgb'].shape)         # [V, 3, H, W]
+    # print("depth shape:", sample['depth'].shape)     # [V, 1, H, W]
+    # print("camera_pos_label:", sample['camera_pos_label'])  # list[int],
+    # print("view_dir shape:", sample['view_dir'].shape)  # [V, 12]
+    # print(sample['cond_img_path'])
 
 
     # print(sample['view_dir'])
+
+    train_ids, test_ids = collect_split_ids()
+    # train_dataset = Depth2ImgFineTuneDataset(root_dir=dataset_root,
+    #                                      views_per_model=4,
+    #                                     #  transform=your_transform,
+    #                                      model_ids=train_ids)
+    
+    # test_dataset = Depth2ImgFineTuneDataset(root_dir=dataset_root,
+    #                                     views_per_model=4,
+    #                                     # transform=your_transform,
+    #                                     model_ids=test_ids)
+
+    # train dataloader
+    train_loader = get_dataloader(
+        root=dataset_root,
+        batch_size=4,
+        views_per_model=4,
+        model_ids=train_ids,
+        shuffle=False
+    )
+
+    # test dataloader
+    test_loader = get_dataloader(
+        root=dataset_root,
+        batch_size=4,
+        views_per_model=4,
+        model_ids=test_ids,
+        shuffle=False
+    )
+
 
     

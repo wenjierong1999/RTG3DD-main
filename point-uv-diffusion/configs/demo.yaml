@@ -1,0 +1,52 @@
+# @package _global_
+# training settings
+defaults:
+  - _self_
+  - paths: default.yaml
+  - datamodule: null
+  - model: null
+  - logger: null
+  - trainer: default.yaml
+  - experiment: null
+  - debug: null
+
+task_name: null # will be overrided by experiment name
+
+
+# set False to skip model training
+train: True
+test: True
+
+ckpt_path: null
+
+
+
+# seed for random number generators in pytorch, numpy and python.random
+seed: null
+
+
+## configurations for distributed GPU training
+
+# Total number of processes (i.e., total number of GPUs used across all nodes)
+# For single-node training, set this equal to the number of GPUs you want to use
+world_size: 2
+
+# Local GPU index assigned to this process by torchrun (typically set automatically via LOCAL_RANK env variable)
+# -1 means not yet set; should be updated at runtime from os.environ["LOCAL_RANK"]
+local_rank: -1
+
+# The initialization method for distributed backend
+# 'env://' lets torch.distributed read config like MASTER_ADDR and MASTER_PORT from environment variables (recommended for torchrun)
+dist_url: 'env://'
+
+# Set to True if using Intel oneAPI Training Platform (ITP) for distributed training; 
+# We set false here 
+dist_on_itp: False
+
+# If loading configuration from a previous experiment folder (e.g., for resume or evaluation)
+# Set to the path of that folder, or keep False to start fresh
+config_load: False
+
+# If resuming training from a previous checkpoint, set to True
+# The checkpoint path will usually be constructed like: ${config_load}/ckpt
+ckpt_resume: False

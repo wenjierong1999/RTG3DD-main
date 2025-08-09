@@ -5,7 +5,7 @@ inpaint:
   "image_path":
   "mask_path":
   "ip_adapter_image_path": 
-  "prompt":  "UV map, monkey head, Sci-Fi digital painting, high quality"
+  "prompt":  "UV map, a modern furniture, high quality, smooth, no seams"
   "negative_prompt": "strong light, Bright light, intense light, dazzling light, brilliant light, radiant light, Shade, darkness, silhouette, dimness, obscurity, shadow, glasses"
   "seed": -1
   "width": 1024
@@ -29,6 +29,7 @@ img2img:
   # run
   "image_path":
   "ip_adapter_image_path": 
+  "ip_adapter_key": "ip-adapter-plus_sd15.safetensors"
   "prompt":  "UV map, (Sci-Fi digital painting:1.3), high quality, best quality"
   "negative_prompt": "blur, low quality, noisy image, over-exposed, shadow"
   "seed": -1
